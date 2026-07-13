@@ -18,3 +18,9 @@ class JobRepository:
         await self.session.commit()
         await self.session.refresh(job)
         return job
+
+    async def update_job(self, job: Job) -> Job:
+        self.session.add(job)
+        await self.session.commit()
+        await self.session.refresh(job)
+        return job
