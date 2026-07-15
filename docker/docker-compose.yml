@@ -14,7 +14,7 @@ services:
     depends_on:
       - redis
 
-  celery:
+  worker:
     build:
       context: ..
       dockerfile: docker/Dockerfile
@@ -23,7 +23,7 @@ services:
       - /app/.venv
     env_file:
       - ../.env
-    command: uv run celery -A main.celery_app worker --loglevel=info
+    command: uv run python -m app.worker.main
     depends_on:
       - redis
       - web
