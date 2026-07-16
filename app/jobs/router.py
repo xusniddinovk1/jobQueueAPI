@@ -7,6 +7,17 @@ from app.jobs.dependencies import get_job_service
 router = APIRouter(prefix="/jobs", tags=["jobs"])
 
 
+@router.get("/", response_model=list[JobResponseSchema], status_code=status.HTTP_200_OK)
+async def get_jobs(
+        job_status: str | None = None,
+        limit: int = 10,
+        offset: int = 0,
+        service: JobService = Depends(get_job_service)
+):
+    jobs = await service.list_jobs(job_status, limit, offset)
+    return jobs
+
+
 @router.post("/", response_model=JobResponseSchema, status_code=status.HTTP_201_CREATED)
 async def create_job(
         job_data: JobCreateSchema,
