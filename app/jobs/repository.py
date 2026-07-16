@@ -7,6 +7,22 @@ class JobRepository:
     def __init__(self, session: AsyncSession) -> None:
         self.session = session
 
+    async def list_jobs(
+            self,
+            status: str | None = None,
+            limit: int = 10,
+            offset: int = 0,
+    ) -> list[Job]:
+        query = select(Job)
+
+        if status:
+            query = query.where(Job.status == status)
+
+        query = query.limit(limit).offset(offset).order_by(Job.created_at.desc())
+
+        result = await self.session.execute(query)
+        return list(result.scalars().all())
+
     async def get_job_by_id(self, job_id: int) -> Job | None:
         result = await self.session.execute(select(Job).where(Job.id == job_id))
         job = result.scalar_one_or_none()
