@@ -1,94 +1,90 @@
-# Architecture
+# job-queue-api
 
-## Purpose
+Task/Job Queue API — a self-built background job processing system using FastAPI, SQLAlchemy (async), and Redis, with a custom worker instead of Celery.
 
-A background job processing system built to understand how tools like Celery work internally. Instead of using Celery or arq, the queue and worker are built from scratch using Redis lists and a Python asyncio loop.
+---
 
-## Tech Stack
+## Requirements
 
-- **Framework**: FastAPI (async)
-- **ORM**: SQLAlchemy 2.0 (async, with `Mapped`/`mapped_column`)
-- **Database**: PostgreSQL (asyncpg driver)
-- **Migrations**: Alembic (async-configured)
-- **Queue**: Redis (list-based, `rpush`/`blpop`)
-- **Validation**: Pydantic v2
-- **Containerization**: Docker + Docker Compose
-- **Dependency Manager**: uv
+- Docker
+- Docker Compose
+- uv
 
-## Layered Architecture
+---
 
-```
-Router → Schema → Service → Repository → Model
+## Environment Variables
+
+```bash
+cp .env.example .env
+# Fill in the required values
 ```
 
-- **Router** — handles HTTP request/response, FastAPI auto-generates docs from it
-- **Schema** (Pydantic) — validates input, shapes output (equivalent of DRF serializers)
-- **Service** — business logic (pushing jobs to the queue, checking retry limits)
-- **Repository** — database operations only, no business logic
-- **Model** (SQLAlchemy) — table structure
+Key variables:
 
-## Dependency Injection
-
-FastAPI's built-in `Depends()` replaces the manually-written `container.py` pattern used in Django projects:
-
-```python
-def get_job_repository(session: AsyncSession = Depends(get_db)) -> JobRepository:
-    return JobRepository(session)
-
-def get_job_service(repo: JobRepository = Depends(get_job_repository)) -> JobService:
-    return JobService(repo)
+```env
+DATABASE_URL=postgresql+asyncpg://postgres:postgres@db:5432/task_queue_db
+REDIS_URL=redis://redis:6379/0
 ```
 
-Each function declares what it needs, and FastAPI resolves the chain automatically when a request comes in.
+---
 
-## Job Flow
+## Running the Project
 
-```
-POST /jobs/
-      ↓
-Router validates request (JobCreateSchema)
-      ↓
-Service creates Job (status=PENDING), saves to DB
-      ↓
-Service pushes job.id to Redis list "job_queue"
-      ↓
-API returns 201 immediately
-      ↓ (background, separate process)
-Worker: blpop("job_queue") → picks up job.id
-      ↓
-Worker loads job from DB, sets status=RUNNING
-      ↓
-Worker executes the task based on task_type
-      ↓
-Success → status=SUCCESS, result saved
-Failure → retry_count += 1, re-queued with backoff, or status=FAILED after max_retries
+### Docker Compose (Recommended)
+
+```bash
+docker compose -f docker/docker-compose.yml up -d --build
 ```
 
-## Why Redis Lists Instead of Polling
+Starts 4 containers: `web`, `worker`, `db` (PostgreSQL), `redis`.
 
-The worker uses `blpop`, a blocking pop — it waits for a job to appear instead of repeatedly checking the queue every few seconds. This avoids wasted requests to Redis and picks up new jobs with no delay.
+Run migrations:
 
-## Retry Mechanism
-
-On failure, the job is not immediately marked as failed. Instead:
-
-```python
-job.retry_count += 1
-
-if job.retry_count < job.max_retries:
-    job.status = Job.JobStatus.PENDING
-    await asyncio.sleep(2 ** job.retry_count)   # exponential backoff
-    await redis_client.rpush("job_queue", str(job.id))
-else:
-    job.status = Job.JobStatus.FAILED
+```bash
+docker compose -f docker/docker-compose.yml exec web uv run alembic upgrade head
 ```
 
-This mirrors Celery's `self.retry(countdown=...)` pattern, built manually. One known limitation: since the worker runs as a single sequential loop, `asyncio.sleep()` during a retry blocks it from picking up other jobs during that wait. Production-grade systems use a separate delayed queue or scheduler to avoid this; this project keeps the simpler version for clarity.
+### Native (uv)
 
-## Async Throughout
+```bash
+git clone https://github.com/xusniddinovk1/jobQueueAPI
+cd jobQueueAPI
 
-Every layer (router, service, repository) uses `async def` / `await`, since the database driver (`asyncpg`) and Redis client are both async. This lets the API handle many concurrent requests without blocking on I/O.
+uv sync
 
-## Database vs Redis
+uv run alembic upgrade head
 
-Redis only stores the job ID — never the full job data. The database is always the source of truth. The worker re-fetches the job from the database after receiving its ID from Redis, so it always works with the current state.
+uv run uvicorn app.main:app --reload
+```
+
+Run the worker in a separate terminal:
+
+```bash
+uv run python -m app.worker.main
+```
+
+---
+
+## API Endpoints
+
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| POST | `/jobs/` | Create a new job |
+| GET | `/jobs/` | List jobs (supports `job_status`, `limit`, `offset` filters) |
+| GET | `/jobs/{job_id}` | Get a single job |
+
+---
+
+## API Documentation
+
+FastAPI generates docs automatically:
+
+```
+http://localhost:8000/docs
+```
+
+---
+
+## Architecture
+
+See [ARCHITECTURE.md](./ARCHITECTURE.md) for details on system design, the layered architecture, and how the custom worker replaces Celery.
