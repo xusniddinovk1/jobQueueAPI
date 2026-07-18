@@ -45,13 +45,25 @@ async def worker_loop() -> None:
             await repo.update_job(job)
 
             try:
-                Job_result = await process_job(job)
+                job_result = await process_job(job)
                 job.status = Job.JobStatus.SUCCESS
-                job.result = Job_result
+                job.result = job_result
+                await repo.update_job(job)
             except Exception as e:
-                job.status = Job.JobStatus.FAILED
-                job.error_message = f"Job {job_id} failed with error: {e}"
-            await repo.update_job(job)
+                job.retry_count += 1
+
+                if job.retry_count < job.max_retries:
+                    # Qayta urinish uchun, jobni yana navbatga qo'yamiz
+                    job.status = Job.JobStatus.PENDING
+                    job.error_message = f"Retry {job.retry_count}/{job.max_retries}: {e}"
+                    await repo.update_job(job)
+
+                    await asyncio.sleep(2 ** job.retry_count)  # exponential backoff
+                    await redis_client.rpush("job_queue", str(job.id))
+                else:
+                    job.status = Job.JobStatus.FAILED
+                    job.error_message = f"Failed after {job.max_retries} retries: {e}"
+                    await repo.update_job(job)
 
 
 if __name__ == "__main__":
